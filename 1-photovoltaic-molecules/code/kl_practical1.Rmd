@@ -1,0 +1,362 @@
+---
+output: pdf_document
+---
+CS 181: Practical 1
+====================================================================
+Linear (Multiple) Regression Investigative Analysis
+
+# Summary of Models Tried
+
+- modelbase: replica of given basic model (resid SE: 0.2989)
+- model2: modelbase with 3 outliers removed (resid SE: 0.2989)
+- model3: log transform of response variable (resid SE: 0.1626)(test 0.29789)
+- model4: reciprocal transform of response (resid SE: 0.09575)(test >0.30)
+- model5: square root transform of response (resid SE: 0.1092)
+- model6: backwards selection from model 3 (resid SE: / AIC 3632945)
+- model7: forward selection with interactions (did not converge)
+- model8: stepwise selection with interactions (did not converge)
+
+## Assumptions of Linear Regression
+(Reference: Ramsey, "The Statistical Sleuth", p. 211)
+
+1. **Independence**: The location of any response in relation to its mean cannot be predicted, either fully or partially, from knowledge of where other responses are in relation to other means.
+
+2. **Normality**: The subpopulation of responses at the different values of the explanatory variable should all have normal distributions. Note that *prediction* is more sensitive to deviations from normality because it is based on normality of the population distribution of Y given X, rather than on the sampling distributions of the estimates (which may be approximately normal even when the population distributions aren't).
+
+3. **Constant Variance**: The spread of the response around the straight line is the same at all levels of the explanatory variable. Prediction may be more sensitive when this assumption is not met.
+
+4. **Linearity**: The plot of response means against the explanatory variable is a straight line. Predictions can be biased -- the intended quantity may be systematically under or over estimated. Transformations, of the predictors or the response, or interactions, or non-linear functions of X may alleviate some of these issues.
+
+## Replicating results of the baseline
+
+Loading the data.
+
+```{r}
+# may need to set current working directory
+fname = "train.csv"
+datamaster = read.csv(fname, header=TRUE, colClasses=c('character', rep('factor', 256), 'double'))
+str(datamaster)
+```
+
+Removing the smiles column and the gap column after saving the gap data as response.
+
+```{r}
+data <- datamaster
+resp <- data$gap
+data$smiles <- NULL
+data$gap <- NULL
+```
+
+Let's run the linear regression with the given features (no feature engineering, feature selection, or transformations):
+
+```{r eval=FALSE}
+modelbase = lm(resp ~ ., data = data)
+```
+
+When we try this, we get an error: 
+
+"Error in `contrasts<-`(`*tmp*`, value = contr.funs[1 + isOF[nn]]) : contrasts can be applied only to factors with 2 or more levels" 
+
+We note that if we treat the features as having integer values of 0 and 1, we are able to obtain a model, with summary statistics that show the RMSE, and R-squared values that we calculated on the training set, match with what was provided. (In that case we still received a warning: "Coefficients: (228 not defined because of singularities), which indicates some of the independent variables may be perfectly collinear.) 
+
+Visual inspection of the data suggests that many of these features are simply columns of all zeros, so they are not adding any new information, and R cannot use it for the model since there is no variability. Let's try to delete those columns:
+
+```{r}
+# identify columns to drop
+# source: http://stackoverflow.com/questions/18171246/error-in-contrasts-when-defining-a-linear-model-in-r
+ifelse(n<-sapply(data,function(x)length(levels(x)))==1,"DROP","NODROP")
+
+for(i in 1:ncol(data)){
+  if (n[i]==TRUE) {
+    data[,names(n[i])] <- NULL
+  }
+}
+
+str(data)
+```
+
+We are left with 31 variables that have varying values.
+
+```{r}
+modelbase = lm(resp ~ ., data = data)
+summary(modelbase)
+```
+
+The metrics appear to match.
+
+We now see whether we can replicate the predictions made on the test data set.
+
+```{r}
+fname2 = "test.csv"
+data_test_master = read.csv(fname2, header=TRUE, colClasses=c('integer', 'character', rep('factor', 256)))
+str(data_test_master)
+```
+
+We save the Id column and drop the Id and smiles columns.
+
+```{r}
+data_test <- data_test_master
+data_test$smiles <- NULL
+Ids  <- data_test$Id
+data_test$Id <- NULL
+```
+
+We now delete the columns that did not have any variance in the training set. Note that we can lose information in this way, but we don't have much choice since there was nothing in the training set that we can use to connect the response with a feature that might happen to have some variance within the test set.
+
+```{r}
+for(i in 1:ncol(data_test)){
+  if (n[i]==TRUE) {
+    data_test[,names(n[i])] <- NULL
+  }
+}
+```
+
+We create the prediction vector:
+
+```{r}
+testout <- predict(modelbase, data_test)
+summary(testout)
+testout[1:10]
+```
+
+Seems generally consistent, but with some rounding error.
+
+Let's test that we can produce an output file in the expected format:
+
+```{r eval=FALSE}
+# Ids <- 1:nrow(data_test)
+csvout <- data.frame(Id=integer(nrow(data_test)), Prediction=double(nrow(data_test)))
+csvout$Id <- Ids
+csvout$Prediction <- testout
+
+# Write CSV in R
+write.csv(csvout, file = "Rsample1.csv",row.names=FALSE)
+```
+
+The values seem to match what is produced in the sample IPython notebook (but the files sample1.csv and sample2.csv seem to be swapped).
+
+## Exploration
+
+```{r}
+# sequence of responses by index
+Ids_resp = integer(length(resp))
+Ids_resp <- 1:length(resp)
+plot(Ids_resp[1:100], resp[1:100], type = "l")
+plot(Ids_resp[10000:10100], resp[10000:10100], type = "l")
+```
+
+This is hard to check, but just wanted to see whether the responses were somehow obviously ordered in some manner.
+
+```{r}
+hist(resp)
+```
+
+Looks pretty normal-shaped, so no transformation is necessary based on this. Note that it is difficult to identify outliers here given the scale. 
+
+Other than the fact that some of the features are zero vectors as noted above, we do not expect the plots to provide much more information since all features are binary (a line can always be drawn).
+
+Let's take a lot at a plot of the residuals based on the training data:
+
+```{r}
+resids = summary(modelbase)$residuals
+fitted = predict(modelbase)
+plot(resids ~ fitted, col=c(1,0,0,0.1))
+abline(h=0, lwd=3)
+```
+
+This scatterplot of residuals versus fitted values may be more informative: it has a classic horn-shaped pattern, "showing a combination of a poor fit to the subpopulation averages and increasing variability... A horn-shaped pattern in the residual plot suggests a response transformation like the square root, the logarithm, or the reciprocal." (Ramsey, p. 214).
+
+We also note a few outliers, one in particular that stands out -- this may be extremely relevant, or it could be a mistake. It might be interesting to remove it just to see if the resultant model may have better predictive power.
+
+```{r}
+qqnorm(resids)
+qqline(resids)
+```
+
+This is consistent with the histogram we observed earlier, although three outliers are quite visible on this graph. Let's try to identify what values might be outliers.
+
+```{r}
+plot(modelbase)
+```
+
+R provides four plots:
+
+1. **Residuals versus the fitted values**: We can look for deviations from the constant variance assumption using this plot. The outliers according to this plot are observations 320587, 827005, and 998546.
+
+2. **Normal Q-Q plot**: We can look for deviations from the normality assumption using this plot. The outliers according to this plot are also 320587, 827005, and 998546.  
+
+3. **Scale-Location plot**: This is a plot of the square roots of standardized residuals versus fitted values. The outliers according to this plot are also 320587, 827005, and 998546.  
+
+4. **Residuals versus Leverage**: This is a plot of residuals versus leverage that adds bands corresponding to Cook's distances of 0.5 and 1. Observations 199973, 823045, and 964695 are highighted (but they don't seem extremely off from their groups).
+
+## Model Building
+
+### removing outliers from the baseline
+
+I am going to try to remove the three common outliers (320587, 827005, and 998546) to see if they have any effect on the results. We should not be removing outliers as a matter of course, and generally we could go back and investigate how the data was actually obtained to see if they might be actual outliers.
+
+```{r}
+data2 <- data[-c(320587, 827005, 998546), ]
+resp2 <- resp[-c(320587, 827005, 998546)]
+
+model2 = lm(resp2 ~ ., data = data2)
+summary(model2)
+
+summary(resp)
+resp[320587]
+resp[827005]
+resp[998546]
+summary(resp2)
+```
+
+No change, but let's continue without these outliers while we work on addressing the variance issue: these are the only data items with negative responses, which seems odd given the remaining of the 1M responses are non-negative. We should consider consulting a domain expert to see if these responses can be validly negative and/or whether this data point can be fixed if it should not be (e.g. does taking the absolute value make sense).
+
+### transforming the response variable to address heteroscedasticity
+
+Let's try a logarithmic transformation of the response variable to see how that fares.
+
+```{r}
+summary(resp2)
+log_resp = log(resp2)
+
+model3 = lm(log_resp ~ ., data = data2)
+
+resids = summary(model3)$residuals
+fitted = predict(model3)
+plot(resids ~ fitted, col=c(1,0,0,0.1))
+abline(h=0, lwd=3)
+
+qqnorm(resids)
+qqline(resids)
+
+hist(log_resp)
+```
+
+The residuals graph looks a bit better after the log transformation, but the residuals are not as normal-looking. The histogram still shows a generally symmetric distribution however -- and since these methods are generally more robust to deviations from normality, this may not be a bad model to try.
+
+**Update**: We submitted this on Kaggle and the RMSE calculated was 0.29789, better than the baseline, but not as well as the low residual standard error would have suggested. Possible overfitting.
+
+```{r}
+recip_resp = 1.0/resp2
+
+model4 = lm(recip_resp ~ ., data = data2)
+
+resids = summary(model4)$residuals
+fitted = predict(model4)
+plot(resids ~ fitted, col=c(1,0,0,0.1))
+abline(h=0, lwd=3)
+
+hist(recip_resp)
+```
+
+The reciprocal transformation seems to fix the variance issue, but skews the response variable distribution. This may be too strong.
+
+```{r}
+sqrt_resp = sqrt(resp2)
+
+model5 = lm(sqrt_resp ~ ., data = data2)
+
+resids = summary(model5)$residuals
+fitted = predict(model5)
+plot(resids ~ fitted, col=c(1,0,0,0.1))
+abline(h=0, lwd=3)
+
+hist(sqrt_resp)
+```
+
+The square root transformation maintains symmetry of the response variable but does not do that much to fix the variance issue.  Let's see how the model with the logarithmic transformation of the response variable fares:
+
+```{r}
+summary(model3) # log
+```
+
+Simply transforming the response variable has resulted in a model with significant lower residual standard error. 
+
+```{r eval=FALSE}
+testout3 <- predict(model3, data_test)
+testout3 <- exp(testout3)  # inverse transform
+summary(testout3)
+
+csvout3 <- data.frame(Id=integer(nrow(data_test)), Prediction=double(nrow(data_test)))
+csvout3$Id <- Ids
+csvout3$Prediction <- testout3
+
+# Write CSV in R
+write.csv(csvout3, file = "Rsample3.csv",row.names=FALSE)
+```
+
+Interestingly, the other two models have even lower residual standard errors, but I'm not sure I trust these models as much given there are issues with whether the models satisfy regression assumptions.
+
+```{r}
+summary(model4) # reciprocal
+summary(model5) # square root
+```
+
+```{r eval=FALSE}
+testout4 <- predict(model4, data_test)
+testout4 <- 1.0/(testout4)  # inverse transform
+summary(testout4)
+
+csvout4 <- data.frame(Id=integer(nrow(data_test)), Prediction=double(nrow(data_test)))
+csvout4$Id <- Ids
+csvout4$Prediction <- testout4
+
+# Write CSV in R
+write.csv(csvout4, file = "Rsample4.csv",row.names=FALSE)
+```
+
+### backward selection (after transformation)
+
+Let's begin with the "full" log model (model3) and eliminate variables based on AIC criterion (note: different criterion may result in different models, just as different selection techniques may result in different models).
+
+```{r eval=FALSE}
+model6 = step(model3, direction="backward", trace=0)
+summary(model6)
+extractAIC(model6)
+```
+
+A few variables were eliminated.  Let's try adding interactive effects using the variables from model6 as the main effects, and do a forward selection process.  We expect the resulting model to be quite complex but it may capture some interesting interactions.
+
+#### forward selection with interactions using main effects
+
+```{r eval=FALSE}
+## create upper bound model
+modvars = paste(paste("log_resp ~ (",paste(model6$terms[[3]],
+                                             collapse="+"),sep = ""), 
+                                             ")^2", sep = "")
+
+interactionModel = lm(modvars, data=data2)
+
+## forward variable selection starting from model6
+model7 = step(model6, scope = list(upper=interactionModel), direction="forward", trace=0)
+summary(model7)
+extractAIC(model7)
+```
+
+This did not converge (likely due to memory constraints), which is probably not that surprising.
+
+### stepwise selection
+
+We start with a model with all the main effects of model3, with the model of just the intercept and a full model with interaction terms as the scope of a stepwise selection process. This will also likely result in a highly complex model with many interaction terms. This may suggest the possibility of overfitting.
+
+```{r eval=FALSE}
+## create intercept-only and full model with interactions model
+intercept_only = lm(log_resp ~ 1, data = data2)
+full_model = lm(log_resp ~ .^2, data = data2)
+
+## stepwise procedure
+model8 = step(model3, scope = list(lower = intercept_only, upper = full_model),
+              direction = "both", trace = 0)
+summary(model8)
+extractAIC(model8)
+```
+
+This also did not converge. 
+
+# Final Notes
+
+We should check that the assumptions are made for any model that we decide to consider further.
+
+We should consider performing **cross-validation**; some models might be overfit, and performing cross-validation may result in a different model being chosen.
+
+Domain knowledge would be very helpful to help determine which interactions actually make sense, particularly so we can narrow the list. This might also help us determine whether some other function of select individual predictor variables (e.g. quadratic, sinusoidal, etc.) may make sense. This would help control the size of the problem.
